@@ -9,7 +9,6 @@ This repository packages an isolated, loopback-only Docker lab for validating fi
 
 The lab downloads WordPress and Forminator only from their official distribution hosts and verifies their SHA-256 digests during the image build. Docker publishes WordPress on `127.0.0.1` only; the database has no host port.
 
-> Coordinated-disclosure notice: some cases in this research set were novel when validated. Prepare and test locally, but do not make the repository public until the relevant vendor-notification and embargo decisions are complete.
 
 ## What is proven
 
