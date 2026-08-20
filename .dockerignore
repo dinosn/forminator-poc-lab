@@ -1,0 +1,6 @@
+.git
+.github
+.lab-state
+*.zip
+__pycache__
+*.pyc

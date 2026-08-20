@@ -1,0 +1,52 @@
+name: forminator-poc-lab
+
+services:
+  db:
+    image: mariadb:10.11@sha256:8020e05c4c498d06c87f0a1db010eb79bd6f8fb30e9b763d4690c34ce1e61008
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: wordpress-lab-only
+      MARIADB_ROOT_PASSWORD: root-lab-only
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    volumes:
+      - db_data:/var/lib/mysql
+
+  wordpress:
+    build:
+      context: .
+      args:
+        WORDPRESS_VERSION: "6.8.3"
+        WORDPRESS_SHA256: "92da34c9960e64d1258652c1ef73c517f7e46ac6dfd2dfc75436d3855af46b0c"
+        FORMINATOR_VERSION: "${FORMINATOR_VERSION:-1.56.1}"
+        FORMINATOR_SHA256: "${FORMINATOR_SHA256:-9fc3ec887bba4bcd90be28a82717b04be25dc67bad63222ca35781cf382a603d}"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress-lab-only
+      WORDPRESS_DEBUG: "1"
+      FORMINATOR_LAB: "1"
+      FORMINATOR_LAB_NONCE_KEY: "forminator-lab-only"
+    ports:
+      - "127.0.0.1:${FORMINATOR_LAB_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/wp-login.php >/dev/null || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - wordpress_data:/var/www/html
+
+volumes:
+  db_data:
+  wordpress_data:

@@ -1,0 +1,39 @@
+name: lab
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static syntax checks
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -x lab tests/*.sh
+          bash -n lab tests/*.sh poc_*.sh
+          python3 -m py_compile poc_*.py
+          docker compose config >/dev/null
+      - name: Build and start exact vulnerable lab
+        run: ./lab start 1.56.1
+      - name: Run marker-verified suite
+        run: ./lab test all
+      - name: Reset vulnerable-version lab
+        run: ./lab reset
+      - name: Start XML-RPC boundary lab
+        run: ./lab start 1.57.1
+      - name: Run XML-RPC marker proof
+        run: ./lab test xmlrpc-oi
+      - name: Collect logs after failure
+        if: failure()
+        run: docker compose -p forminator-poc-lab logs --no-color --tail=200
+      - name: Remove lab resources
+        if: always()
+        run: ./lab reset

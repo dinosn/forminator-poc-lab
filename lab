@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+PROJECT=forminator-poc-lab
+DEFAULT_VERSION=1.56.1
+PORT=${FORMINATOR_LAB_PORT:-8088}
+BASE_URL="http://127.0.0.1:${PORT}"
+
+die() {
+  printf '[lab] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+version_sha() {
+  case "$1" in
+    1.55.1) printf '%s\n' '4104e2a611a427a2a2c4fa9fab4ad6af71742b27adb1a22d857f40401cf1a0c2' ;;
+    1.56.1) printf '%s\n' '9fc3ec887bba4bcd90be28a82717b04be25dc67bad63222ca35781cf382a603d' ;;
+    1.57.0) printf '%s\n' 'fe6a7f36323cfc62cf5fd3beba7b6b75298c2f030a07522d2e98b62c7e8d2913' ;;
+    1.57.1) printf '%s\n' '496bf211d146ce5c6f0c287118c48850ace0abfbfba488a8d00a557fdc0afa22' ;;
+    *) die "unsupported Forminator version '$1' (allowed: 1.55.1, 1.56.1, 1.57.0, 1.57.1)" ;;
+  esac
+}
+
+dc() {
+  docker compose --project-directory "$ROOT" -p "$PROJECT" "$@"
+}
+
+wp() {
+  dc exec -T -u www-data wordpress wp --path=/var/www/html "$@"
+}
+
+wait_for_http() {
+  local _
+  for _ in $(seq 1 80); do
+    if curl -fsS --max-time 2 "$BASE_URL/wp-login.php" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  dc logs --tail=80 wordpress >&2 || true
+  die "WordPress did not become ready at $BASE_URL"
+}
+
+start_lab() {
+  local version=${1:-$DEFAULT_VERSION}
+  local sha
+  sha=$(version_sha "$version")
+  export FORMINATOR_VERSION=$version
+  export FORMINATOR_SHA256=$sha
+  export FORMINATOR_LAB_PORT=$PORT
+
+  printf '[lab] building WordPress 6.8.3 / PHP 7.4 / Forminator %s\n' "$version"
+  dc up -d --build
+  wait_for_http
+
+  if ! dc exec -T wordpress test -f /var/www/html/wp-config.php; then
+    wp config create \
+      --dbname=wordpress \
+      --dbuser=wordpress \
+      --dbpass=wordpress-lab-only \
+      --dbhost=db:3306 \
+      --skip-check
+  fi
+
+  if ! wp core is-installed >/dev/null 2>&1; then
+    wp core install \
+      --url="$BASE_URL" \
+      --title='Forminator PoC Validation Lab' \
+      --admin_user=labadmin \
+      --admin_password=labpass \
+      --admin_email=labadmin@example.test \
+      --skip-email
+  fi
+
+  wp option update siteurl "$BASE_URL" >/dev/null
+  wp option update home "$BASE_URL" >/dev/null
+  wp plugin install /opt/forminator.zip --force --activate >/dev/null
+
+  local actual_wp actual_plugin
+  actual_wp=$(wp core version)
+  actual_plugin=$(wp plugin get forminator --field=version)
+  [[ "$actual_wp" == '6.8.3' ]] || die "WordPress identity mismatch: $actual_wp"
+  [[ "$actual_plugin" == "$version" ]] || die "Forminator identity mismatch: $actual_plugin"
+
+  printf '[lab] ready: %s\n' "$BASE_URL"
+  printf '[lab] identity: WordPress=%s PHP=%s Forminator=%s\n' \
+    "$actual_wp" "$(dc exec -T wordpress php -r 'echo PHP_VERSION;' | tr -d '\r')" "$actual_plugin"
+  printf '[lab] local credentials: labadmin / labpass\n'
+}
+
+status_lab() {
+  dc ps
+  if dc ps --status running --services | grep -qx wordpress; then
+    printf '[lab] WordPress=%s PHP=%s Forminator=%s URL=%s\n' \
+      "$(wp core version 2>/dev/null || printf UNKNOWN)" \
+      "$(dc exec -T wordpress php -r 'echo PHP_VERSION;' 2>/dev/null | tr -d '\r' || printf UNKNOWN)" \
+      "$(wp plugin get forminator --field=version 2>/dev/null || printf UNKNOWN)" \
+      "$BASE_URL"
+  fi
+}
+
+test_lab() {
+  local name=${1:-all}
+  local version
+  dc ps --status running --services | grep -qx wordpress || die 'lab is not running; use ./lab start first'
+  version=$(wp plugin get forminator --field=version)
+
+  if [[ "$name" == all && "$version" != 1.56.1 ]]; then
+    die "the complete five-case suite is pinned to Forminator 1.56.1; run './lab reset && ./lab start 1.56.1'"
+  fi
+
+  case "$name" in
+    all)
+      "$ROOT/tests/afu.sh"
+      "$ROOT/tests/poll-ip.sh"
+      "$ROOT/tests/role-bypass.sh"
+      "$ROOT/tests/oi-rce.sh"
+      ;;
+    afu) "$ROOT/tests/afu.sh" ;;
+    poll-ip) "$ROOT/tests/poll-ip.sh" ;;
+    role-bypass) "$ROOT/tests/role-bypass.sh" ;;
+    oi-rce) "$ROOT/tests/oi-rce.sh" ;;
+    xmlrpc-oi) "$ROOT/tests/xmlrpc-oi.sh" ;;
+    *) die "unknown test '$name' (allowed: all, afu, poll-ip, role-bypass, oi-rce, xmlrpc-oi)" ;;
+  esac
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./lab <command> [argument]
+
+Commands:
+  start [version]   Build and start the loopback lab (default: 1.56.1)
+  test [case]       Run all tests or one case
+  status            Show containers and exact runtime identity
+  logs              Follow WordPress logs
+  stop              Stop containers but retain lab volumes
+  reset             Remove this lab's containers and volumes
+
+Cases: all (the four 1.56.1 cases), afu, poll-ip, role-bypass, oi-rce, xmlrpc-oi
+Versions: 1.55.1, 1.56.1, 1.57.0, 1.57.1
+EOF
+}
+
+cd "$ROOT"
+case "${1:-}" in
+  start) start_lab "${2:-$DEFAULT_VERSION}" ;;
+  test) test_lab "${2:-all}" ;;
+  status) status_lab ;;
+  logs) dc logs -f wordpress ;;
+  stop) dc stop ;;
+  reset) dc down -v --remove-orphans ;;
+  -h|--help|help|'') usage ;;
+  *) usage >&2; exit 1 ;;
+esac
