@@ -89,7 +89,6 @@ The older standalone scripts remain for evidence continuity, but the Docker test
 - Several original shell scripts contain paths, ports, or nonce keys from the research workstation and are not portable.
 - `poc_afu_live_target.sh` cannot prove a write when directory listing is blocked; it now exits `2` and reports the result as unverified instead of treating request construction as proof.
 - The legacy shell gadget PoC can leave an executable file if interrupted before cleanup. `./lab test oi-rce` uses the Python driver, a loopback guard, a marker-only command, self-unlink, DB assertions, and a cleanup trap.
-- The XML-RPC canary is a lab fixture. It must never be described as a real target gadget.
 
 ## Safety
 
